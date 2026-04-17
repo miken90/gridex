@@ -26,6 +26,7 @@ ICON="$RESOURCES_DIR/AppIcon.icns"
 XCASSETS="$RESOURCES_DIR/Assets.xcassets"
 NOTARIZE="${NOTARIZE:-1}"
 ARCH="${ARCH:-$(uname -m)}"
+SKIP_SIGN="${SKIP_SIGN:-0}"
 
 # 1. Build
 echo "→ Building ($MODE, $ARCH)..."
@@ -97,6 +98,24 @@ if [ -d "$BUNDLE_RESOURCE" ]; then
     fi
 fi
 
+# 7b. Embed Sparkle.framework (for in-app auto-update).
+#     Located in SPM binary artifacts: .build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/
+SPARKLE_FRAMEWORK=$(find "$PROJECT_DIR/.build/artifacts" -type d -name "Sparkle.framework" 2>/dev/null | grep "macos-" | head -1)
+if [ -z "$SPARKLE_FRAMEWORK" ]; then
+    # Fallback to per-arch build output (symlinked from xcframework)
+    SPARKLE_FRAMEWORK="$BUILD_DIR/Sparkle.framework"
+fi
+if [ -d "$SPARKLE_FRAMEWORK" ]; then
+    echo "→ Embedding Sparkle.framework..."
+    FRAMEWORKS_DIR="$CONTENTS/Frameworks"
+    mkdir -p "$FRAMEWORKS_DIR"
+    # Copy preserving symlinks (Sparkle uses Versions/B + Current symlink)
+    rm -rf "$FRAMEWORKS_DIR/Sparkle.framework"
+    cp -R "$SPARKLE_FRAMEWORK" "$FRAMEWORKS_DIR/Sparkle.framework"
+else
+    echo "⚠ Sparkle.framework not found — auto-update will be disabled in this build."
+fi
+
 # 8. Generate runtime entitlements (strip Xcode-only macros)
 RUNTIME_ENT="$OUTPUT_DIR/runtime.entitlements"
 /usr/libexec/PlistBuddy -c "Clear dict" "$RUNTIME_ENT" 2>/dev/null || plutil -create xml1 "$RUNTIME_ENT"
@@ -109,8 +128,9 @@ RUNTIME_ENT="$OUTPUT_DIR/runtime.entitlements"
 # - Debug: ad-hoc signature so the app runs locally without a network round-trip.
 # - Release: full sign + notarize + staple + verify via sign-notarize.sh (which also
 #   handles inside-out signing when Sparkle.framework is embedded in the future).
+# - SKIP_SIGN=1: skip signing entirely (used by release-all.sh before lipo merge).
 
-if [ "$MODE" = "release" ]; then
+if [ "$MODE" = "release" ] && [ "$SKIP_SIGN" != "1" ]; then
     echo "→ Release sign + notarize pipeline..."
     # Keep runtime.entitlements alongside the .app so sign-notarize.sh can pick it up
     # (it sits at $(dirname .app)/runtime.entitlements).
@@ -120,30 +140,14 @@ if [ "$MODE" = "release" ]; then
         "$SCRIPT_DIR/sign-notarize.sh" "$APP_BUNDLE"
     else
         # Sign only, skip notarize (useful during iteration).
+        # Delegate to sign-notarize.sh with SKIP_NOTARIZE=1 so Sparkle inside-out
+        # signing stays consistent across the NOTARIZE=1 and NOTARIZE=0 paths.
         echo "→ Signing only (NOTARIZE=0)..."
-        # Resolve SIGN_IDENTITY the same way sign-notarize.sh does
-        if [ -z "${SIGN_IDENTITY:-}" ] && [ -f "$PROJECT_DIR/.env" ]; then
-            SIGN_IDENTITY=$(grep -E "^SIGN_IDENTITY=" "$PROJECT_DIR/.env" | cut -d= -f2- | tr -d '"')
-        fi
-        if [ -z "${SIGN_IDENTITY:-}" ]; then
-            echo "✗ SIGN_IDENTITY not set. Add it to .env or export it."
-            rm -f "$RUNTIME_ENT"
-            exit 1
-        fi
-        cs_out=$(codesign --force --deep --options runtime --timestamp \
-            --sign "$SIGN_IDENTITY" \
-            --entitlements "$RUNTIME_ENT" \
-            --generate-entitlement-der \
-            "$APP_BUNDLE" 2>&1) || {
-                echo "✗ Signing failed"
-                echo "$cs_out"
-                rm -f "$RUNTIME_ENT"
-                exit 1
-            }
-        echo "$cs_out" | grep -v "unsealed contents" || true
-        codesign --verify --deep --strict --verbose=2 "$APP_BUNDLE"
+        SKIP_NOTARIZE=1 "$SCRIPT_DIR/sign-notarize.sh" "$APP_BUNDLE"
     fi
     rm -f "$RUNTIME_ENT"
+elif [ "$MODE" = "release" ] && [ "$SKIP_SIGN" = "1" ]; then
+    echo "→ Skipping sign (SKIP_SIGN=1) — entitlements kept at $RUNTIME_ENT"
 else
     echo "→ Ad-hoc signing (debug)..."
     cs_out=$(codesign --force --deep --sign - \

@@ -1,6 +1,6 @@
 # Changelog
 
-All notable changes to Gridex (formerly DataBridge) are documented in this file.
+All notable changes to Gridex are documented in this file. Gridex ships native apps for **macOS** (Swift/AppKit) and **Windows** (C++/WinUI 3). Unless noted otherwise, changes apply to both platforms.
 
 ## [0.23.0] - 2026-04-12
 
@@ -585,10 +585,9 @@ The old `exportSQL(data:table:to:)` is kept for backward compatibility but `Expo
 ## [0.0.1] - 2026-04-01
 
 ### Added
-- Initial release
+- Initial release — macOS (Swift/AppKit) and Windows (C++/WinUI 3)
 - Connection management (PostgreSQL, MySQL, SQLite) with SSH tunnel support
 - Database browser with sidebar tree (schemas, tables, views, functions)
 - Data grid with pagination, sorting, filtering
 - Query editor with syntax highlighting
 - AI chat integration (Anthropic/OpenAI/Ollama)
-- MCP server for external AI agents

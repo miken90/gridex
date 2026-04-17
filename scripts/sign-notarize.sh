@@ -1,18 +1,20 @@
 #!/bin/bash
-# sign-notarize.sh — Sign + Notarize a macOS .app or .dmg for distribution
+# sign-notarize.sh — Sign + Notarize a macOS .app or .dmg for distribution.
+# Handles inside-out signing when Sparkle.framework is embedded.
 #
 # Usage:
 #   ./scripts/sign-notarize.sh <path-to-app-or-dmg>
 #
 # Env:
-#   SIGN_IDENTITY   SHA-1 or full name of Developer ID Application cert.
-#                   Defaults to the Gridex production cert (16/4/26, team W3C6S577FM).
-#   NOTARY_PROFILE  notarytool keychain profile name (default: gridex-notarize).
-#   SKIP_SIGN=1     Skip resigning (useful when already signed, just notarize).
+#   SIGN_IDENTITY     SHA-1 or common name of Developer ID Application cert.
+#   NOTARY_PROFILE    notarytool keychain profile (default: gridex-notarize).
+#   SKIP_SIGN=1       Skip resigning (notarize only).
+#   SKIP_NOTARIZE=1   Skip Apple Notary submission (sign only).
 #
-# Flow:
-#   .app → sign (inside-out if Sparkle present) → zip → submit → wait → staple → verify
-#   .dmg → sign → submit → wait → staple → verify
+# Flow for .app:
+#   1. Sparkle inside-out: XPCServices → Autoupdate → Updater.app → Sparkle.framework
+#   2. Sign main app bundle with runtime entitlements
+#   3. Verify → zip → submit → wait → staple → Gatekeeper check
 
 set -euo pipefail
 
@@ -28,9 +30,6 @@ if [ ! -e "$TARGET" ]; then
     exit 1
 fi
 
-# SIGN_IDENTITY: SHA-1 fingerprint or common name of your Developer ID Application cert.
-# Not a secret — certs are public. Set via .env or export before running.
-# Fall back to "-" (ad-hoc) if unset, so forks can build without an Apple account.
 SIGN_IDENTITY="${SIGN_IDENTITY:-${GRIDEX_SIGN_IDENTITY:-}}"
 if [ -z "$SIGN_IDENTITY" ] && [ -f "$(dirname "$0")/../.env" ]; then
     SIGN_IDENTITY=$(grep -E "^SIGN_IDENTITY=" "$(dirname "$0")/../.env" | cut -d= -f2- | tr -d '"')
@@ -44,51 +43,92 @@ fi
 
 NOTARY_PROFILE="${NOTARY_PROFILE:-gridex-notarize}"
 SKIP_SIGN="${SKIP_SIGN:-0}"
+SKIP_NOTARIZE="${SKIP_NOTARIZE:-0}"
 
 echo "═══════════════════════════════════════════"
 echo "  Sign + Notarize"
 echo "  Target:   $TARGET"
 echo "  Identity: $SIGN_IDENTITY"
 echo "  Profile:  $NOTARY_PROFILE"
+[ "$SKIP_NOTARIZE" = "1" ] && echo "  Mode:     SIGN ONLY (SKIP_NOTARIZE=1)"
 echo "═══════════════════════════════════════════"
 
 EXT="${TARGET##*.}"
 
+# Helper: codesign wrapper that filters "unsealed contents" warnings but
+# still catches real failures (works around pipefail interaction with grep -v).
+sign() {
+    local out
+    out=$(codesign --force --options runtime --timestamp \
+        --sign "$SIGN_IDENTITY" "$@" 2>&1) || {
+            echo "✗ codesign failed for: $*"
+            echo "$out"
+            exit 1
+        }
+    echo "$out" | grep -v "unsealed contents" || true
+}
+
+sign_with_entitlements() {
+    local ent="$1"
+    shift
+    local out
+    out=$(codesign --force --options runtime --timestamp \
+        --sign "$SIGN_IDENTITY" \
+        --entitlements "$ent" \
+        --generate-entitlement-der \
+        "$@" 2>&1) || {
+            echo "✗ codesign failed for: $*"
+            echo "$out"
+            exit 1
+        }
+    echo "$out" | grep -v "unsealed contents" || true
+}
+
+sign_sparkle() {
+    local app="$1"
+    local sparkle="$app/Contents/Frameworks/Sparkle.framework"
+    [ -d "$sparkle" ] || return 0
+
+    echo "→ Signing Sparkle inside-out..."
+    local versions_dir="$sparkle/Versions/B"
+    [ -d "$versions_dir" ] || versions_dir="$sparkle/Versions/A"
+
+    # 1. XPC services (Downloader.xpc, Installer.xpc)
+    if [ -d "$versions_dir/XPCServices" ]; then
+        for xpc in "$versions_dir/XPCServices"/*.xpc; do
+            [ -d "$xpc" ] || continue
+            sign "$xpc"
+        done
+    fi
+
+    # 2. Autoupdate helper binary
+    [ -f "$versions_dir/Autoupdate" ] && sign "$versions_dir/Autoupdate"
+
+    # 3. Updater.app (sign inner binary first, then bundle)
+    if [ -d "$versions_dir/Updater.app" ]; then
+        local updater_bin="$versions_dir/Updater.app/Contents/MacOS/Updater"
+        [ -f "$updater_bin" ] && sign "$updater_bin"
+        sign "$versions_dir/Updater.app"
+    fi
+
+    # 4. Sparkle.framework itself
+    sign "$sparkle"
+}
+
 sign_app() {
     local app="$1"
 
-    # Inside-out: if Sparkle.framework is embedded, sign its nested helpers first
-    local sparkle="$app/Contents/Frameworks/Sparkle.framework"
-    if [ -d "$sparkle/Versions/B" ]; then
-        echo "→ Signing Sparkle helpers (inside-out)..."
-        codesign --force --options runtime --timestamp \
-            --sign "$SIGN_IDENTITY" \
-            "$sparkle/Versions/B/Autoupdate" \
-            "$sparkle/Versions/B/Updater.app" 2>&1 | grep -v "unsealed contents" || true
-        codesign --force --options runtime --timestamp \
-            --sign "$SIGN_IDENTITY" \
-            "$sparkle" 2>&1 | grep -v "unsealed contents" || true
-    fi
+    sign_sparkle "$app"
 
-    # Entitlements live alongside the runtime (generated by build-app.sh)
-    local ent_arg=""
-    local runtime_ent="$(dirname "$app")/runtime.entitlements"
-    if [ -f "$runtime_ent" ]; then
-        ent_arg="--entitlements $runtime_ent --generate-entitlement-der"
-    fi
+    # Entitlements live alongside the .app (generated by build-app.sh)
+    local ent_path="$(dirname "$app")/runtime.entitlements"
 
     echo "→ Signing app bundle..."
-    local cs_output
-    # shellcheck disable=SC2086
-    cs_output=$(codesign --force --deep --options runtime --timestamp \
-        --sign "$SIGN_IDENTITY" \
-        $ent_arg \
-        "$app" 2>&1) || {
-            echo "✗ codesign failed"
-            echo "$cs_output"
-            exit 1
-        }
-    echo "$cs_output" | grep -v "unsealed contents" || true
+    if [ -f "$ent_path" ]; then
+        sign_with_entitlements "$ent_path" "$app"
+    else
+        sign "$app"
+    fi
 }
 
 verify_app() {
@@ -115,6 +155,12 @@ if [ "$EXT" = "app" ]; then
     fi
     verify_app "$APP_PATH"
 
+    if [ "$SKIP_NOTARIZE" = "1" ]; then
+        echo ""
+        echo "✓ Signed (not notarized): $APP_PATH"
+        exit 0
+    fi
+
     ZIP_PATH="$(dirname "$APP_PATH")/$(basename "$APP_PATH" .app).zip"
     echo "→ Creating zip for notarization..."
     rm -f "$ZIP_PATH"
@@ -138,6 +184,12 @@ elif [ "$EXT" = "dmg" ]; then
     if [ "$SKIP_SIGN" != "1" ]; then
         echo "→ Signing DMG..."
         codesign --force --sign "$SIGN_IDENTITY" --timestamp "$DMG_PATH"
+    fi
+
+    if [ "$SKIP_NOTARIZE" = "1" ]; then
+        echo ""
+        echo "✓ Signed (not notarized): $DMG_PATH"
+        exit 0
     fi
 
     notarize "$DMG_PATH"

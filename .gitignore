@@ -98,3 +98,4 @@ windows/vendor/
 # Generated version header — written by build-unpackaged.ps1 -Version
 # from the CI tag, falls back to 0.0.0-dev locally via __has_include.
 windows/Gridex/GridexVersion.generated.h
+dist

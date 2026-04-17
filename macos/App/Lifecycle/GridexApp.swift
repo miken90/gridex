@@ -10,6 +10,7 @@ import SwiftData
 struct GridexApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var appDelegate
     @FocusedObject private var focusedAppState: AppState?
+    @ObservedObject private var updater = UpdaterService.shared
 
     private var currentAppState: AppState? { focusedAppState ?? AppState.active }
 
@@ -26,6 +27,13 @@ struct GridexApp: App {
                     currentAppState?.showSettings = true
                 }
                 .keyboardShortcut(",", modifiers: .command)
+            }
+
+            CommandGroup(after: .appInfo) {
+                Button("Check for Updates…") {
+                    updater.checkForUpdates()
+                }
+                .disabled(!updater.canCheckForUpdates)
             }
 
             CommandGroup(after: .newItem) {

@@ -25,6 +25,8 @@ let package = Package(
         .package(url: "https://github.com/orlandos-nl/MongoKitten.git", from: "7.9.0"),
         // MSSQL driver (TDS 7.4, pure Swift NIO, no FreeTDS)
         .package(url: "https://github.com/vkuttyp/CosmoSQLClient-Swift.git", branch: "main"),
+        // Sparkle — macOS auto-update framework
+        .package(url: "https://github.com/sparkle-project/Sparkle", from: "2.6.0"),
     ],
     targets: [
         .executableTarget(
@@ -37,6 +39,7 @@ let package = Package(
                 .product(name: "CosmoMSSQL", package: "CosmoSQLClient-Swift"),
                 .product(name: "NIOSSL", package: "swift-nio-ssl"),
                 .product(name: "NIOSSH", package: "swift-nio-ssh"),
+                .product(name: "Sparkle", package: "Sparkle"),
             ],
             path: "macos",
             exclude: [
