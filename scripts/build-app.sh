@@ -100,7 +100,7 @@ fi
 
 # 7b. Embed Sparkle.framework (for in-app auto-update).
 #     Located in SPM binary artifacts: .build/artifacts/sparkle/Sparkle/Sparkle.xcframework/macos-arm64_x86_64/
-SPARKLE_FRAMEWORK=$(find "$PROJECT_DIR/.build/artifacts" -type d -name "Sparkle.framework" 2>/dev/null | grep "macos-" | head -1)
+SPARKLE_FRAMEWORK=$(find "$PROJECT_DIR/.build/artifacts" -type d -name "Sparkle.framework" 2>/dev/null | grep "macos-" | head -1 || true)
 if [ -z "$SPARKLE_FRAMEWORK" ]; then
     # Fallback to per-arch build output (symlinked from xcframework)
     SPARKLE_FRAMEWORK="$BUILD_DIR/Sparkle.framework"
@@ -112,6 +112,8 @@ if [ -d "$SPARKLE_FRAMEWORK" ]; then
     # Copy preserving symlinks (Sparkle uses Versions/B + Current symlink)
     rm -rf "$FRAMEWORKS_DIR/Sparkle.framework"
     cp -R "$SPARKLE_FRAMEWORK" "$FRAMEWORKS_DIR/Sparkle.framework"
+    # SPM sets rpath to @executable_path — add ../Frameworks so dyld finds the framework
+    install_name_tool -add_rpath "@executable_path/../Frameworks" "$MACOS_DIR/$APP_NAME" 2>/dev/null || true
 else
     echo "⚠ Sparkle.framework not found — auto-update will be disabled in this build."
 fi

@@ -14,25 +14,31 @@ import Sparkle
 final class UpdaterService: ObservableObject {
     static let shared = UpdaterService()
 
-    private let controller: SPUStandardUpdaterController
+    private let controller: SPUStandardUpdaterController?
 
-    @Published var canCheckForUpdates: Bool = true
-
-    var updater: SPUUpdater { controller.updater }
+    @Published var canCheckForUpdates: Bool = false
 
     private init() {
-        controller = SPUStandardUpdaterController(
+        let os = ProcessInfo.processInfo.operatingSystemVersion
+        guard os.majorVersion < 26 else {
+            controller = nil
+            return
+        }
+
+        let c = SPUStandardUpdaterController(
             startingUpdater: true,
             updaterDelegate: nil,
             userDriverDelegate: nil
         )
+        controller = c
+        canCheckForUpdates = c.updater.canCheckForUpdates
 
-        controller.updater.publisher(for: \.canCheckForUpdates)
+        c.updater.publisher(for: \.canCheckForUpdates)
             .receive(on: RunLoop.main)
             .assign(to: &$canCheckForUpdates)
     }
 
     func checkForUpdates() {
-        controller.checkForUpdates(nil)
+        controller?.checkForUpdates(nil)
     }
 }

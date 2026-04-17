@@ -63,6 +63,11 @@ lipo -create \
 echo "✓ Universal binary:"
 lipo -info "$APP_BUNDLE/Contents/MacOS/Gridex"
 
+# Fix rpath so dyld finds Sparkle.framework in Contents/Frameworks/
+# SPM sets @loader_path (= MacOS dir) — we need ../Frameworks too.
+echo "→ Fixing rpath for Sparkle.framework..."
+install_name_tool -add_rpath "@loader_path/../Frameworks" "$APP_BUNDLE/Contents/MacOS/Gridex" 2>/dev/null || true
+
 # 4. Sign + notarize the universal .app
 echo ""
 echo "━━━ Step 4: Sign + Notarize .app ━━━"
