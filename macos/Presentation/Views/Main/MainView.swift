@@ -121,6 +121,7 @@ struct HomeView: View {
     @State private var renameGroupName = ""
     @State private var editingConnection: ConnectionConfig?
     @State private var showConnectionError = false
+    @ObservedObject private var updater = UpdaterService.shared
 
     var body: some View {
         HStack(spacing: 0) {
@@ -228,6 +229,24 @@ struct HomeView: View {
                     Text("AI-Native Database IDE")
                         .font(.system(size: 12))
                         .foregroundStyle(.tertiary)
+
+                    // Version + Check for Updates
+                    HStack(spacing: 6) {
+                        Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0")")
+                            .font(.system(size: 10))
+                            .foregroundStyle(.quaternary)
+
+                        Button {
+                            updater.checkForUpdates()
+                        } label: {
+                            Text("Check for Updates")
+                                .font(.system(size: 10))
+                                .foregroundStyle(.blue)
+                        }
+                        .buttonStyle(.plain)
+                        .disabled(!updater.canCheckForUpdates)
+                    }
+                    .padding(.top, 2)
                 }
             }
 
